@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo Raytrace Dasar - Satu Bola</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #333; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        canvas { border: 1px solid white; }
+    </style>
+</head>
+<body>
+    <canvas id="raytraceCanvas" width="500" height="500"></canvas>
+
+    <script>
+        // --- Mulai "helper.js" (Fungsi Vektor) ---
+
+        const Vec3 = {
+            create: (x = 0, y = 0, z = 0) => [x, y, z],
+
+            dot: (v1, v2) => v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2],
+
+            subtract: (v1, v2) => [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]],
+
+            lengthSquared: (v) => Vec3.dot(v, v),
+
+            length: (v) => Math.sqrt(Vec3.lengthSquared(v)),
+
+            normalize: (v) => {
+                const len = Vec3.length(v);
+                if (len === 0) return [0, 0, 0]; // Hindari pembagian dengan nol
+                return [v[0] / len, v[1] / len, v[2] / len];
+            },
+
+            // Fungsi lain bisa ditambahkan jika perlu (add, multiplyScalar, etc.)
+        };
+
+        // --- Akhir "helper.js" ---
+
+        // --- Logika Raytracing Utama ---
+
+        window.onload = function() {
+            const canvas = document.getElementById('raytraceCanvas');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+            // Pengaturan Scene
+            const cameraOrigin = Vec3.create(0, 0, 0); // Posisi kamera
+            const sphereCenter = Vec3.create(0, 0, -5); // Posisi bola di depan kamera
+            const sphereRadius = 1.5; // Ukuran radius bola
+            const sphereRadiusSq = sphereRadius * sphereRadius; // Precompute squared radius
+
+            const hitColor = [255, 0, 0, 255];    // Merah untuk hit (R, G, B, A)
+            const missColor = [20, 20, 20, 255]; // Abu-abu gelap untuk miss
+
+            // Mendapatkan ImageData untuk manipulasi piksel langsung
+            const imageData = ctx.createImageData(width, height);
+            const data = imageData.data; // Array [R, G, B, A, R, G, B, A, ...]
+
+            console.log("Memulai Raytracing...");
+
+            // Loop utama untuk setiap piksel
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+
+                    // 1. Hitung arah Ray dari Kamera melalui Piksel
+                    // Konversi koordinat piksel (x, y) ke koordinat viewport (-1 to 1)
+                    // Ingat: sumbu Y canvas ke bawah, sumbu Y dunia biasanya ke atas
+                    const viewportX = (x / width) * 2 - 1;
+                    const viewportY = -((y / height) * 2 - 1); // Negasi karena Y canvas ke bawah
+                    const viewportZ = -1; // Posisi Z bidang pandang (view plane)
+
+                    // Arah ray adalah vektor dari origin kamera ke titik di viewport
+                    const rayDirection = Vec3.normalize(Vec3.create(viewportX, viewportY, viewportZ));
+
+                    // 2. Hitung Intersection Ray dengan Bola
+                    // Rumus: At^2 + Bt + C = 0
+                    // A = dot(rayDirection, rayDirection) -> 1 jika rayDirection dinormalisasi
+                    // B = 2 * dot(rayDirection, cameraOrigin - sphereCenter)
+                    // C = dot(cameraOrigin - sphereCenter, cameraOrigin - sphereCenter) - sphereRadius^2
+
+                    const oc = Vec3.subtract(cameraOrigin, sphereCenter); // Vektor dari pusat bola ke origin kamera
+
+                    const a = Vec3.dot(rayDirection, rayDirection); // Seharusnya ~1.0
+                    const b = 2.0 * Vec3.dot(oc, rayDirection);
+                    const c = Vec3.dot(oc, oc) - sphereRadiusSq;
+
+                    const discriminant = b * b - 4 * a * c;
+
+                    // 3. Tentukan Warna Piksel berdasarkan Intersection
+                    let pixelColor;
+                    if (discriminant >= 0) {
+                        // Ray mengenai bola (>= 0 mencakup kasus tangen)
+                        pixelColor = hitColor;
+                        // Kita tidak perlu menghitung t atau titik hit untuk demo ini
+                    } else {
+                        // Ray tidak mengenai bola
+                        pixelColor = missColor;
+                    }
+
+                    // 4. Set warna piksel dalam ImageData
+                    const index = (y * width + x) * 4; // Setiap piksel butuh 4 elemen (R,G,B,A)
+                    data[index]     = pixelColor[0]; // R
+                    data[index + 1] = pixelColor[1]; // G
+                    data[index + 2] = pixelColor[2]; // B
+                    data[index + 3] = pixelColor[3]; // A
+                }
+            }
+
+            // 5. Gambar hasil ke Canvas
+            ctx.putImageData(imageData, 0, 0);
+            console.log("Raytracing Selesai.");
+        };
+
+    </script>
+</body>
+</html>
