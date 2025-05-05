@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Raytracer - Two Overlapping Spheres</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background-color: #222;
+        color: white;
+        font-family: Arial, sans-serif;
+      }
+      canvas {
+        border: 2px solid #444;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        margin-bottom: 15px;
+      }
+      .info {
+        text-align: center;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Simple Raytracer</h1>
+    <canvas id="canvas" width="500" height="500"></canvas>
+    <div class="info" id="renderTime"></div>
+
+    <script>
+      // Main execution when DOM is loaded
+      document.addEventListener("DOMContentLoaded", () => {
+        // Setup canvas
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+        const width = canvas.width;
+        const height = canvas.height;
+        const imageData = ctx.createImageData(width, height);
+        const pixels = imageData.data;
+
+        console.log("Starting raytracer...");
+        const startTime = performance.now();
+
+        // Render the scene
+        renderScene(width, height, pixels);
+
+        // Display the result
+        ctx.putImageData(imageData, 0, 0);
+
+        const endTime = performance.now();
+        const renderTime = ((endTime - startTime) / 1000).toFixed(3);
+        document.getElementById(
+          "renderTime"
+        ).textContent = `Render time: ${renderTime} seconds`;
+        console.log(`Raytracing completed in ${renderTime} seconds`);
+      });
+
+      // 3D Vector class
+      class Vec3 {
+        constructor(x = 0, y = 0, z = 0) {
+          this.x = x;
+          this.y = y;
+          this.z = z;
+        }
+
+        add(v) {
+          return new Vec3(this.x + v.x, this.y + v.y, this.z + v.z);
+        }
+
+        subtract(v) {
+          return new Vec3(this.x - v.x, this.y - v.y, this.z - v.z);
+        }
+
+        multiply(s) {
+          return new Vec3(this.x * s, this.y * s, this.z * s);
+        }
+
+        dot(v) {
+          return this.x * v.x + this.y * v.y + this.z * v.z;
+        }
+
+        length() {
+          return Math.sqrt(this.dot(this));
+        }
+
+        normalize() {
+          const len = this.length();
+          if (len === 0) return new Vec3();
+          return this.multiply(1 / len);
+        }
+      }
+
+      // Ray class
+      class Ray {
+        constructor(origin, direction) {
+          this.origin = origin;
+          this.direction = direction.normalize();
+        }
+
+        pointAt(t) {
+          return this.origin.add(this.direction.multiply(t));
+        }
+      }
+
+      // Sphere class
+      class Sphere {
+        constructor(center, radius, color) {
+          this.center = center;
+          this.radius = radius;
+          this.color = color;
+        }
+
+        intersect(ray) {
+          // Vector from ray origin to sphere center
+          const oc = ray.origin.subtract(this.center);
+
+          // Quadratic equation coefficients
+          const a = ray.direction.dot(ray.direction);
+          const b = 2.0 * oc.dot(ray.direction);
+          const c = oc.dot(oc) - this.radius * this.radius;
+
+          // Discriminant determines number of intersections
+          const discriminant = b * b - 4 * a * c;
+
+          if (discriminant < 0) {
+            return null; // No intersection
+          }
+
+          // Find the nearest intersection point in front of the ray
+          const sqrtd = Math.sqrt(discriminant);
+          let t = (-b - sqrtd) / (2 * a);
+
+          // If t is negative, try the other solution
+          if (t < 0.001) {
+            t = (-b + sqrtd) / (2 * a);
+            if (t < 0.001) {
+              return null; // Both intersections are behind the ray
+            }
+          }
+
+          return {
+            distance: t,
+            point: ray.pointAt(t),
+            object: this,
+          };
+        }
+      }
+
+      // Main rendering function
+      function renderScene(width, height, pixels) {
+        // Scene setup
+        const camera = new Vec3(0, 0, 5); // Camera position
+        const aspectRatio = width / height;
+
+        // Create our two overlapping spheres
+        const spheres = [
+          new Sphere(new Vec3(0, 0, -1), 1.0, { r: 0, g: 0, b: 255 }), // Blue sphere
+          new Sphere(new Vec3(0.5, 0, -0.2), 1.0, { r: 255, g: 0, b: 0 }), // Red sphere
+        ];
+
+        // Render each pixel
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            // Convert pixel coordinates to normalized device coordinates (-1 to 1)
+            const u = (x + 0.5) / width;
+            const v = (y + 0.5) / height;
+            const screenX = (2 * u - 1) * aspectRatio;
+            const screenY = 1 - 2 * v; // Flip Y to match conventional 3D coordinates
+
+            // Create ray from camera to this pixel on the image plane
+            const direction = new Vec3(screenX, screenY, -1)
+              .subtract(camera)
+              .normalize();
+            const ray = new Ray(camera, direction);
+
+            // Trace the ray and get pixel color
+            const color = traceRay(ray, spheres);
+
+            // Set pixel color in the image data
+            const pixelIndex = (y * width + x) * 4;
+            pixels[pixelIndex] = color.r; // Red
+            pixels[pixelIndex + 1] = color.g; // Green
+            pixels[pixelIndex + 2] = color.b; // Blue
+            pixels[pixelIndex + 3] = 255; // Alpha (fully opaque)
+          }
+        }
+      }
+
+      // Trace a ray through the scene
+      function traceRay(ray, objects) {
+        let closestIntersection = null;
+        let minDistance = Infinity;
+
+        // Find closest intersection
+        for (const object of objects) {
+          const intersection = object.intersect(ray);
+          if (intersection && intersection.distance < minDistance) {
+            minDistance = intersection.distance;
+            closestIntersection = intersection;
+          }
+        }
+
+        // Return object color or background color
+        if (closestIntersection) {
+          return closestIntersection.object.color;
+        } else {
+          return { r: 0, g: 0, b: 0 }; // Background color (black)
+        }
+      }
+    </script>
+  </body>
+</html>
