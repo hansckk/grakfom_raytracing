@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Raytracer - Multiple Refractive Spheres</title>
+    <style>
+      body {
+        margin: 20px;
+        font-family: sans-serif;
+        background-color: #f0f0f0;
+      }
+      canvas {
+        border: 1px solid #555;
+        display: block;
+        background-color: black;
+        margin-bottom: 20px;
+      }
+      .controls {
+        margin-bottom: 20px;
+        padding: 10px;
+        border: 1px solid #ccc;
+        background-color: #fff;
+      }
+      .control-row {
+        margin-bottom: 10px;
+      }
+      .controls label {
+        margin-right: 10px;
+        display: inline-block;
+        width: 200px;
+      }
+      h1 {
+        font-size: 1.5em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Raytracer - Multiple Refractive Spheres</h1>
+    <div class="controls">
+      <div class="control-row">
+        <label for="iorSlider"
+          >Blue Glass Sphere IoR: <span id="iorValueDisplay">1.50</span></label
+        >
+        <input
+          type="range"
+          id="iorSlider"
+          min="1.0"
+          max="2.5"
+          value="1.5"
+          step="0.01"
+        />
+      </div>
+      <div class="control-row">
+        <label for="iorSlider2"
+          >Green Crystal Sphere IoR:
+          <span id="ior2ValueDisplay">2.00</span></label
+        >
+        <input
+          type="range"
+          id="iorSlider2"
+          min="1.0"
+          max="3.0"
+          value="2.0"
+          step="0.01"
+        />
+      </div>
+      <div class="control-row">
+        <label for="transparencySlider"
+          >Green Crystal Transparency:
+          <span id="transparencyValueDisplay">0.95</span></label
+        >
+        <input
+          type="range"
+          id="transparencySlider"
+          min="0.0"
+          max="1.0"
+          value="0.95"
+          step="0.01"
+        />
+      </div>
+    </div>
+    <canvas id="raytraceCanvas" width="600" height="500"></canvas>
+
+    <script>
+      // --- Vector Math Library ---
+      const Vector = {
+        create: (x = 0, y = 0, z = 0) => ({ x, y, z }),
+        add: (v1, v2) => ({ x: v1.x + v2.x, y: v1.y + v2.y, z: v1.z + v2.z }),
+        subtract: (v1, v2) => ({
+          x: v1.x - v2.x,
+          y: v1.y - v2.y,
+          z: v1.z - v2.z,
+        }),
+        multiplyScalar: (v, s) => ({ x: v.x * s, y: v.y * s, z: v.z * s }),
+        dot: (v1, v2) => v1.x * v2.x + v1.y * v2.y + v1.z * v2.z,
+        lengthSq: (v) => v.x * v.x + v.y * v.y + v.z * v.z,
+        length: (v) => Math.sqrt(Vector.lengthSq(v)),
+        normalize: (v) => {
+          const len = Vector.length(v);
+          if (len === 0) return Vector.create();
+          return Vector.multiplyScalar(v, 1 / len);
+        },
+        reflect: (incident, normal) => {
+          // Assumes incident vector points towards the surface
+          const dotIN = Vector.dot(incident, normal);
+          return Vector.subtract(
+            incident,
+            Vector.multiplyScalar(normal, 2 * dotIN)
+          );
+        },
+        refract: (incident_I, normal_N, n1, n2) => {
+          // incident_I and normal_N must be normalized
+          const eta = n1 / n2;
+          const cosI = -Vector.dot(normal_N, incident_I); // cos(theta1)
+          const sinT2 = eta * eta * (1.0 - cosI * cosI); // sin^2(theta2)
+
+          if (sinT2 > 1.0) return null; // Total Internal Reflection
+
+          const cosT = Math.sqrt(1.0 - sinT2);
+          // R_t = eta * I + (eta * cosI - cosT) * N
+          const term1 = Vector.multiplyScalar(incident_I, eta);
+          const term2Factor = eta * cosI - cosT;
+          const term2 = Vector.multiplyScalar(normal_N, term2Factor);
+          return Vector.normalize(Vector.add(term1, term2));
+        },
+      };
+
+      // --- Color Math Library (components in [0, 1]) ---
+      const Color = {
+        create: (r = 0, g = 0, b = 0) => ({ r, g, b }),
+        add: (c1, c2) => ({ r: c1.r + c2.r, g: c1.g + c2.g, b: c1.b + c2.b }),
+        multiply: (c1, c2) => ({
+          r: c1.r * c2.r,
+          g: c1.g * c2.g,
+          b: c1.b * c2.b,
+        }),
+        multiplyScalar: (c, s) => ({ r: c.r * s, g: c.g * s, b: c.b * s }),
+        clamp: (c) => ({
+          r: Math.max(0, Math.min(1, c.r)),
+          g: Math.max(0, Math.min(1, c.g)),
+          b: Math.max(0, Math.min(1, c.b)),
+        }),
+        toRGBA255: (c) => {
+          const clamped = Color.clamp(c);
+          return [
+            Math.floor(clamped.r * 255),
+            Math.floor(clamped.g * 255),
+            Math.floor(clamped.b * 255),
+            255,
+          ];
+        },
+      };
+
+      // --- Global Raytracer Settings & Scene Variables ---
+      let glassSphereIOR = 1.5;
+      let crystalSphereIOR = 2.0;
+      let crystalTransparency = 0.95;
+      let sceneObjects = [];
+      let lights = [];
+      let globalAmbientLight;
+      let sceneBackgroundColor;
+      let camera;
+
+      const MAX_RECURSION_DEPTH = 5;
+      const INTERSECTION_EPSILON = 1e-4; // For t > epsilon checks in intersections
+      const SURFACE_OFFSET_EPSILON = 1e-3; // For offsetting shadow, reflection, refraction rays
+
+      // --- Scene Setup Function ---
+      function setupScene() {
+        camera = {
+          origin: Vector.create(0, 0.8, 6.5), // Slightly elevated and further back
+          lookAt: Vector.create(0, 0, 0), // Simplified, not used for ray generation here
+          fov: 45, // Degrees, conceptual for viewPlane calculation
+        };
+
+        sceneBackgroundColor = Color.create(0.08, 0.08, 0.12); // Dark bluish gray
+        globalAmbientLight = { color: Color.create(1, 1, 1), intensity: 0.2 };
+
+        lights = [
+          {
+            position: Vector.create(5, 5, -5),
+            color: Color.create(1, 1, 1),
+            intensity: 1.0,
+          },
+          {
+            position: Vector.create(-5, 5, 5),
+            color: Color.create(1, 1, 0.8),
+            intensity: 1.0,
+          },
+        ];
+
+        const Y_FLOOR = -0.8;
+        sceneObjects = [
+          {
+            // Checkered Floor
+            type: "plane",
+            point: Vector.create(0, Y_FLOOR, 0),
+            normal: Vector.normalize(Vector.create(0, 1, 0)),
+            material: {
+              pattern: "checkered",
+              color1: Color.create(1, 1, 1), // White
+              color2: Color.create(0, 0, 0), // Black
+              checkerScale: 1.0,
+              ambient: 0.25,
+              diffuse: 0.5,
+              specular: 0.5,
+              shininess: 60,
+              reflectivity: 0.4,
+              transparency: 0,
+              ior: 1.0,
+            },
+          },
+          {
+            // Blue Glass Sphere (Refractive/Reflective)
+            type: "sphere",
+            id: "glass_sphere", // To find it easily for IOR update
+            center: Vector.create(-1.2, Y_FLOOR + 0.6, -1),
+            radius: 0.6,
+            material: {
+              color: Color.create(0.1, 0.3, 0.9), // Base color for non-refracted/reflected part
+              ambient: 0.15,
+              diffuse: 0.6,
+              specular: 0.8,
+              shininess: 120,
+              reflectivity: 0.1, // Base reflectivity, Fresnel would be better
+              transparency: 0.9,
+              ior: glassSphereIOR, // Updated by UI
+            },
+          },
+          {
+            // Green Crystal Sphere (Higher IOR)
+            type: "sphere",
+            id: "crystal_sphere", // To find it easily for IOR update
+            center: Vector.create(1.0, Y_FLOOR + 0.8, -0.5),
+            radius: 0.8,
+            material: {
+              color: Color.create(0.1, 0.8, 0.3), // Green tint for crystal
+              ambient: 0.15,
+              diffuse: 0.5,
+              specular: 0.9,
+              shininess: 150,
+              reflectivity: 0.2, // Slightly more reflective
+              transparency: crystalTransparency, // Higher transparency
+              ior: crystalSphereIOR, // Higher IOR for stronger refraction
+            },
+          },
+          {
+            // Solid Red Sphere
+            type: "sphere",
+            center: Vector.create(0.0, Y_FLOOR + 0.2, 0.8),
+            radius: 0.2,
+            material: {
+              color: Color.create(0.9, 0.15, 0.1),
+              ambient: 0.15,
+              diffuse: 0.7,
+              specular: 0.9,
+              shininess: 150,
+              reflectivity: 0.2,
+              transparency: 0,
+              ior: 1.5, // IOR not used if not transparent
+            },
+          },
+        ];
+      }
+
+      // --- Intersection Functions ---
+      function intersectSphere(rayOrigin, rayDirection, sphere) {
+        const oc = Vector.subtract(rayOrigin, sphere.center);
+        const a = Vector.dot(rayDirection, rayDirection);
+        const b = 2.0 * Vector.dot(oc, rayDirection);
+        const c = Vector.dot(oc, oc) - sphere.radius * sphere.radius;
+        const discriminant = b * b - 4 * a * c;
+
+        if (discriminant < 0) return Infinity;
+        const sqrtD = Math.sqrt(discriminant);
+        const t0 = (-b - sqrtD) / (2 * a);
+        const t1 = (-b + sqrtD) / (2 * a);
+
+        if (t0 > INTERSECTION_EPSILON && t1 > INTERSECTION_EPSILON)
+          return Math.min(t0, t1);
+        if (t0 > INTERSECTION_EPSILON) return t0;
+        if (t1 > INTERSECTION_EPSILON) return t1;
+        return Infinity;
+      }
+
+      function intersectPlane(rayOrigin, rayDirection, plane) {
+        const denom = Vector.dot(plane.normal, rayDirection);
+        if (Math.abs(denom) < 1e-6) return Infinity; // Ray parallel to plane
+        const t =
+          Vector.dot(Vector.subtract(plane.point, rayOrigin), plane.normal) /
+          denom;
+        return t > INTERSECTION_EPSILON ? t : Infinity;
+      }
+
+      function findClosestIntersection(rayOrigin, rayDirection) {
+        let closest_t = Infinity;
+        let hitObject = null;
+
+        for (const object of sceneObjects) {
+          let t = Infinity;
+          if (object.type === "sphere") {
+            t = intersectSphere(rayOrigin, rayDirection, object);
+          } else if (object.type === "plane") {
+            t = intersectPlane(rayOrigin, rayDirection, object);
+          }
+          if (t < closest_t) {
+            closest_t = t;
+            hitObject = object;
+          }
+        }
+
+        if (!hitObject) return null;
+
+        const hitPoint = Vector.add(
+          rayOrigin,
+          Vector.multiplyScalar(rayDirection, closest_t)
+        );
+        let normal;
+        if (hitObject.type === "sphere") {
+          normal = Vector.normalize(
+            Vector.subtract(hitPoint, hitObject.center)
+          );
+        } else {
+          // Plane
+          normal = hitObject.normal;
+        }
+        return {
+          object: hitObject,
+          t: closest_t,
+          point: hitPoint,
+          normal: normal,
+        };
+      }
+
+      // --- Lighting and Shading ---
+      function isInShadow(shadowRayOrigin, lightSource, objectBeingShaded) {
+        const shadowRayDirection = Vector.normalize(
+          Vector.subtract(lightSource.position, shadowRayOrigin)
+        );
+        const distanceToLight = Vector.length(
+          Vector.subtract(lightSource.position, shadowRayOrigin)
+        );
+
+        for (const obj of sceneObjects) {
+          if (obj === objectBeingShaded) continue; // Don't self-shadow with the primary hit object
+
+          let tShadow = Infinity;
+          if (obj.type === "sphere")
+            tShadow = intersectSphere(shadowRayOrigin, shadowRayDirection, obj);
+          else if (obj.type === "plane")
+            tShadow = intersectPlane(shadowRayOrigin, shadowRayDirection, obj);
+
+          if (tShadow < distanceToLight) return true; // Obstruction found
+        }
+        return false;
+      }
+
+      function calculateDirectLighting(hitInfo, viewDirection, baseColor) {
+        const material = hitInfo.object.material;
+        let totalDirectColor = Color.create(0, 0, 0);
+
+        // Global Ambient
+        const ambientTerm = Color.multiplyScalar(
+          Color.multiply(globalAmbientLight.color, baseColor),
+          material.ambient * globalAmbientLight.intensity
+        );
+        totalDirectColor = Color.add(totalDirectColor, ambientTerm);
+
+        // Per-light Diffuse and Specular
+        for (const light of lights) {
+          const shadowRayOrigin = Vector.add(
+            hitInfo.point,
+            Vector.multiplyScalar(hitInfo.normal, SURFACE_OFFSET_EPSILON)
+          );
+          if (!isInShadow(shadowRayOrigin, light, hitInfo.object)) {
+            const lightDir = Vector.normalize(
+              Vector.subtract(light.position, hitInfo.point)
+            );
+
+            // Diffuse
+            const diffFactor = Math.max(
+              0,
+              Vector.dot(hitInfo.normal, lightDir)
+            );
+            if (diffFactor > 0) {
+              const diffuseColor = Color.multiplyScalar(
+                Color.multiply(light.color, baseColor),
+                material.diffuse * light.intensity * diffFactor
+              );
+              totalDirectColor = Color.add(totalDirectColor, diffuseColor);
+
+              // Specular
+              const reflectedLightDir = Vector.reflect(
+                Vector.multiplyScalar(lightDir, -1),
+                hitInfo.normal
+              );
+              const specFactor = Math.pow(
+                Math.max(0, Vector.dot(reflectedLightDir, viewDirection)),
+                material.shininess
+              );
+              if (specFactor > 0) {
+                const specularColor = Color.multiplyScalar(
+                  light.color, // Specular highlight is typically from light color, not object color
+                  material.specular * light.intensity * specFactor
+                );
+                totalDirectColor = Color.add(totalDirectColor, specularColor);
+              }
+            }
+          }
+        }
+        return totalDirectColor; // Clamping happens at the very end in traceRay
+      }
+
+      // --- Core Ray Tracing Function ---
+      function traceRay(rayOrigin, rayDirection, depth) {
+        if (depth >= MAX_RECURSION_DEPTH) return Color.create(0, 0, 0); // Black for max depth
+
+        const hitInfo = findClosestIntersection(rayOrigin, rayDirection);
+        if (!hitInfo) return sceneBackgroundColor;
+
+        const material = hitInfo.object.material;
+        const hitPoint = hitInfo.point;
+        let surfaceNormal = hitInfo.normal; // Normal at hit point, pointing outwards
+        const viewDirection = Vector.normalize(
+          Vector.multiplyScalar(rayDirection, -1)
+        ); // Points from hit to origin
+
+        // Determine base color (e.g., for checkered plane)
+        let baseObjectColor;
+        if (
+          hitInfo.object.type === "plane" &&
+          material.pattern === "checkered"
+        ) {
+          const u = Math.floor(hitPoint.x / material.checkerScale);
+          const v = Math.floor(hitPoint.z / material.checkerScale);
+          baseObjectColor =
+            (u + v) % 2 === 0 ? material.color1 : material.color2;
+        } else {
+          baseObjectColor = material.color || Color.create(0.5, 0.5, 0.5); // Default if no color
+        }
+
+        // Calculate color from direct illumination
+        const directColor = calculateDirectLighting(
+          hitInfo,
+          viewDirection,
+          baseObjectColor
+        );
+
+        let reflectedColor = Color.create(0, 0, 0);
+        let refractedColor = Color.create(0, 0, 0);
+
+        const reflectivity = material.reflectivity || 0;
+        const transparency = material.transparency || 0;
+
+        // Effective "local" color contribution weight
+        // This simplified model assumes reflectivity and transparency reduce direct contribution.
+        // Fresnel effects would make these view-dependent.
+        let localColorWeight = 1.0 - reflectivity - transparency;
+
+        // Reflection
+        if (reflectivity > 0) {
+          const reflectionRayDir = Vector.reflect(rayDirection, surfaceNormal);
+          const reflectionRayOrigin = Vector.add(
+            hitPoint,
+            Vector.multiplyScalar(surfaceNormal, SURFACE_OFFSET_EPSILON)
+          );
+          reflectedColor = traceRay(
+            reflectionRayOrigin,
+            reflectionRayDir,
+            depth + 1
+          );
+        }
+
+        // Refraction
+        let tirOccurred = false;
+        if (transparency > 0) {
+          const iorAir = 1.0;
+          const iorObject = material.ior || 1.0; // Default to 1.0 if not specified
+
+          let n1, n2, N_snell;
+          const NdotI = Vector.dot(rayDirection, surfaceNormal);
+
+          if (NdotI < 0) {
+            // Ray entering object (surfaceNormal is already outward-facing)
+            n1 = iorAir;
+            n2 = iorObject;
+            N_snell = surfaceNormal;
+          } else {
+            // Ray exiting object (surfaceNormal points in same general direction as ray)
+            n1 = iorObject;
+            n2 = iorAir;
+            N_snell = Vector.multiplyScalar(surfaceNormal, -1); // Flip normal to point into the current medium
+          }
+
+          const refractedDir = Vector.refract(rayDirection, N_snell, n1, n2);
+
+          if (!refractedDir) {
+            // Total Internal Reflection
+            tirOccurred = true;
+            // All "transparent" energy is reflected internally
+            const tirReflectionRayDir = Vector.reflect(
+              rayDirection,
+              surfaceNormal
+            ); // Use original surfaceNormal
+            const tirReflectionRayOrigin = Vector.add(
+              hitPoint,
+              Vector.multiplyScalar(surfaceNormal, SURFACE_OFFSET_EPSILON)
+            );
+            // The energy that would have been refracted is now reflected.
+            // This 'refractedColor' slot will hold the TIR reflection.
+            refractedColor = traceRay(
+              tirReflectionRayOrigin,
+              tirReflectionRayDir,
+              depth + 1
+            );
+          } else {
+            // Offset origin slightly along the refracted direction to move "inside" or "outside"
+            const refractionRayOrigin = Vector.add(
+              hitPoint,
+              Vector.multiplyScalar(refractedDir, SURFACE_OFFSET_EPSILON)
+            );
+            refractedColor = traceRay(
+              refractionRayOrigin,
+              refractedDir,
+              depth + 1
+            );
+          }
+        }
+        localColorWeight = Math.max(0, localColorWeight); // Ensure not negative
+
+        // Combine all color contributions
+        let finalColor = Color.multiplyScalar(directColor, localColorWeight);
+        finalColor = Color.add(
+          finalColor,
+          Color.multiplyScalar(reflectedColor, reflectivity)
+        );
+
+        // If TIR occurred, the "refractedColor" is actually a reflection contribution, scaled by transparency coefficient
+        // Otherwise, it's normal refraction scaled by transparency.
+        finalColor = Color.add(
+          finalColor,
+          Color.multiplyScalar(refractedColor, transparency)
+        );
+
+        return Color.clamp(finalColor); // Clamp here or at the very end before drawing
+      }
+
+      // --- Render Scene ---
+      function renderScene() {
+        console.log(
+          `Rendering with Blue Glass IoR: ${glassSphereIOR.toFixed(
+            2
+          )}, Green Crystal IoR: ${crystalSphereIOR.toFixed(
+            2
+          )}, Transparency: ${crystalTransparency.toFixed(2)}`
+        );
+        const startTime = performance.now();
+
+        const canvas = document.getElementById("raytraceCanvas");
+        const ctx = canvas.getContext("2d");
+        const canvasWidth = canvas.width;
+        const canvasHeight = canvas.height;
+        const aspectRatio = canvasWidth / canvasHeight;
+
+        // Update both spheres IOR from global variables
+        const glassSphere = sceneObjects.find(
+          (obj) => obj.id === "glass_sphere"
+        );
+        if (glassSphere) {
+          glassSphere.material.ior = glassSphereIOR;
+        }
+
+        const crystalSphere = sceneObjects.find(
+          (obj) => obj.id === "crystal_sphere"
+        );
+        if (crystalSphere) {
+          crystalSphere.material.ior = crystalSphereIOR;
+          crystalSphere.material.transparency = crystalTransparency;
+        }
+
+        const imageData = ctx.createImageData(canvasWidth, canvasHeight);
+        const data = imageData.data;
+
+        // Simplified view plane setup for perspective projection
+        const viewPlaneHeight =
+          2.0 * Math.tan((camera.fov / 2.0) * (Math.PI / 180.0)); // Assuming distance 1 to view plane
+        const viewPlaneWidth = viewPlaneHeight * aspectRatio;
+
+        for (let y = 0; y < canvasHeight; y++) {
+          for (let x = 0; x < canvasWidth; x++) {
+            // Map pixel to view plane coordinates
+            const u = (x + 0.5) / canvasWidth; // Normalized coord [0, 1]
+            const v = (y + 0.5) / canvasHeight; // Normalized coord [0, 1]
+
+            // Screen space coordinates [-1, 1]
+            const screenX = (2 * u - 1) * (viewPlaneWidth / 2);
+            const screenY = (1 - 2 * v) * (viewPlaneHeight / 2); // Y is inverted
+
+            // Assuming view plane is at z=0 relative to camera, looking towards -z
+            // This is a simplified ray generation. For full camera transform, you'd use matrices.
+            const pointOnViewPlane = Vector.create(
+              screenX,
+              screenY,
+              camera.origin.z - 1
+            ); // View plane 1 unit in front of camera
+
+            const rayOrigin = camera.origin;
+            const rayDirection = Vector.normalize(
+              Vector.subtract(pointOnViewPlane, rayOrigin)
+            );
+
+            const pixelColor = traceRay(rayOrigin, rayDirection, 0);
+            const rgba = Color.toRGBA255(pixelColor);
+
+            const pixelIndex = (y * canvasWidth + x) * 4;
+            data[pixelIndex] = rgba[0];
+            data[pixelIndex + 1] = rgba[1];
+            data[pixelIndex + 2] = rgba[2];
+            data[pixelIndex + 3] = rgba[3];
+          }
+        }
+        ctx.putImageData(imageData, 0, 0);
+        const endTime = performance.now();
+        console.log(
+          `Raytracing completed in ${(endTime - startTime).toFixed(2)} ms`
+        );
+      }
+
+      // --- UI Event Listeners ---
+      document.addEventListener("DOMContentLoaded", () => {
+        const iorSlider = document.getElementById("iorSlider");
+        const iorValueDisplay = document.getElementById("iorValueDisplay");
+        const iorSlider2 = document.getElementById("iorSlider2");
+        const ior2ValueDisplay = document.getElementById("ior2ValueDisplay");
+        const transparencySlider =
+          document.getElementById("transparencySlider");
+        const transparencyValueDisplay = document.getElementById(
+          "transparencyValueDisplay"
+        );
+
+        iorSlider.addEventListener("input", (event) => {
+          glassSphereIOR = parseFloat(event.target.value);
+          iorValueDisplay.textContent = glassSphereIOR.toFixed(2);
+        });
+
+        iorSlider2.addEventListener("input", (event) => {
+          crystalSphereIOR = parseFloat(event.target.value);
+          ior2ValueDisplay.textContent = crystalSphereIOR.toFixed(2);
+        });
+
+        transparencySlider.addEventListener("input", (event) => {
+          crystalTransparency = parseFloat(event.target.value);
+          transparencyValueDisplay.textContent = crystalTransparency.toFixed(2);
+        });
+
+        // Re-render when any slider value is finalized
+        iorSlider.addEventListener("change", () => {
+          setupScene();
+          renderScene();
+        });
+
+        iorSlider2.addEventListener("change", () => {
+          setupScene();
+          renderScene();
+        });
+
+        transparencySlider.addEventListener("change", () => {
+          setupScene();
+          renderScene();
+        });
+
+        // Initial setup and render
+        setupScene();
+        renderScene();
+      });
+    </script>
+  </body>
+</html>

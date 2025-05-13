@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Raytracer dengan Pencahayaan Phong</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background-color: #f5f5f5;
+        font-family: Arial, sans-serif;
+      }
+      canvas {
+        border: 2px solid #333;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        background-color: black;
+      }
+      h1 {
+        margin-bottom: 20px;
+        color: #333;
+      }
+      .info {
+        margin-top: 20px;
+        color: #666;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Raytracer dengan Pencahayaan Phong</h1>
+    <canvas id="raytracerCanvas" width="500" height="500"></canvas>
+    <div class="info">Rendering scene dengan dua bola dan lantai...</div>
+
+    <script>
+      // ========== Vector Helper Class ==========
+      class Vector3 {
+        constructor(x = 0, y = 0, z = 0) {
+          this.x = x;
+          this.y = y;
+          this.z = z;
+        }
+
+        add(v) {
+          return new Vector3(this.x + v.x, this.y + v.y, this.z + v.z);
+        }
+
+        subtract(v) {
+          return new Vector3(this.x - v.x, this.y - v.y, this.z - v.z);
+        }
+
+        multiply(scalar) {
+          return new Vector3(this.x * scalar, this.y * scalar, this.z * scalar);
+        }
+
+        dot(v) {
+          return this.x * v.x + this.y * v.y + this.z * v.z;
+        }
+
+        lengthSquared() {
+          return this.x * this.x + this.y * this.y + this.z * this.z;
+        }
+
+        length() {
+          return Math.sqrt(this.lengthSquared());
+        }
+
+        normalize() {
+          const len = this.length();
+          if (len === 0) return new Vector3();
+          return new Vector3(this.x / len, this.y / len, this.z / len);
+        }
+
+        reflect(normal) {
+          // R = I - 2(N·I)N
+          const dotProduct = this.dot(normal);
+          return this.subtract(normal.multiply(2 * dotProduct));
+        }
+      }
+
+      // ========== Color Helper Class ==========
+      class Color {
+        constructor(r = 0, g = 0, b = 0) {
+          this.r = r;
+          this.g = g;
+          this.b = b;
+        }
+
+        add(color) {
+          return new Color(
+            this.r + color.r,
+            this.g + color.g,
+            this.b + color.b
+          );
+        }
+
+        multiply(color) {
+          return new Color(
+            this.r * color.r,
+            this.g * color.g,
+            this.b * color.b
+          );
+        }
+
+        scale(scalar) {
+          return new Color(this.r * scalar, this.g * scalar, this.b * scalar);
+        }
+
+        clamp() {
+          return new Color(
+            Math.max(0, Math.min(1, this.r)),
+            Math.max(0, Math.min(1, this.g)),
+            Math.max(0, Math.min(1, this.b))
+          );
+        }
+
+        toRGBA() {
+          return [
+            Math.floor(this.r * 255),
+            Math.floor(this.g * 255),
+            Math.floor(this.b * 255),
+            255,
+          ];
+        }
+      }
+
+      // ========== Material Class ==========
+      class Material {
+        constructor(color, ambient, diffuse, specular, shininess) {
+          this.color = color;
+          this.ambient = ambient;
+          this.diffuse = diffuse;
+          this.specular = specular;
+          this.shininess = shininess;
+        }
+      }
+
+      // ========== Ray Class ==========
+      class Ray {
+        constructor(origin, direction) {
+          this.origin = origin;
+          this.direction = direction.normalize();
+        }
+
+        pointAt(t) {
+          return this.origin.add(this.direction.multiply(t));
+        }
+      }
+
+      // ========== Camera Class ==========
+      class Camera {
+        constructor(position, aspectRatio) {
+          this.position = position;
+          this.aspectRatio = aspectRatio;
+        }
+
+        generateRay(x, y, width, height) {
+          const u = (x + 0.5) / width;
+          const v = (y + 0.5) / height;
+
+          const screenX = (2 * u - 1) * this.aspectRatio;
+          const screenY = 1 - 2 * v;
+
+          const pointOnImagePlane = new Vector3(screenX, screenY, 0);
+          const direction = pointOnImagePlane
+            .subtract(this.position)
+            .normalize();
+
+          return new Ray(this.position, direction);
+        }
+      }
+
+      // ========== Hit Information Class ==========
+      class HitInfo {
+        constructor() {
+          this.t = Infinity;
+          this.point = null;
+          this.normal = null;
+          this.material = null;
+        }
+      }
+
+      // ========== Base Scene Object Class ==========
+      class SceneObject {
+        constructor(material) {
+          this.material = material;
+        }
+
+        intersect(ray) {
+          // Abstract method to be implemented by derived classes
+          return new HitInfo();
+        }
+      }
+
+      // ========== Sphere Class ==========
+      class Sphere extends SceneObject {
+        constructor(center, radius, material) {
+          super(material);
+          this.center = center;
+          this.radius = radius;
+        }
+
+        intersect(ray) {
+          const hitInfo = new HitInfo();
+
+          const oc = ray.origin.subtract(this.center);
+          const a = ray.direction.dot(ray.direction);
+          const b = 2.0 * oc.dot(ray.direction);
+          const c = oc.dot(oc) - this.radius * this.radius;
+
+          const discriminant = b * b - 4 * a * c;
+
+          if (discriminant < 0) {
+            return hitInfo; // No intersection
+          }
+
+          const sqrtDiscriminant = Math.sqrt(discriminant);
+          const epsilon = 0.0001;
+
+          // Try first solution
+          let t = (-b - sqrtDiscriminant) / (2 * a);
+          if (t < epsilon) {
+            // Try second solution if first is invalid
+            t = (-b + sqrtDiscriminant) / (2 * a);
+            if (t < epsilon) {
+              return hitInfo; // No valid intersection
+            }
+          }
+
+          // Valid intersection
+          hitInfo.t = t;
+          hitInfo.point = ray.pointAt(t);
+          hitInfo.normal = hitInfo.point.subtract(this.center).normalize();
+          hitInfo.material = this.material;
+
+          return hitInfo;
+        }
+      }
+
+      // ========== Plane Class ==========
+      class Plane extends SceneObject {
+        constructor(point, normal, material) {
+          super(material);
+          this.point = point;
+          this.normal = normal.normalize();
+        }
+
+        intersect(ray) {
+          const hitInfo = new HitInfo();
+
+          const denominator = ray.direction.dot(this.normal);
+          const epsilon = 0.0001;
+
+          // Ray parallel to plane
+          if (Math.abs(denominator) < epsilon) {
+            return hitInfo; // No intersection
+          }
+
+          const t =
+            this.point.subtract(ray.origin).dot(this.normal) / denominator;
+
+          // Intersection behind ray origin
+          if (t < epsilon) {
+            return hitInfo; // No valid intersection
+          }
+
+          // Valid intersection
+          hitInfo.t = t;
+          hitInfo.point = ray.pointAt(t);
+          hitInfo.normal = this.normal;
+          hitInfo.material = this.material;
+
+          return hitInfo;
+        }
+      }
+
+      // ========== Light Classes ==========
+      class Light {
+        constructor(position, color, intensity) {
+          this.position = position;
+          this.color = color;
+          this.intensity = intensity;
+        }
+      }
+
+      class AmbientLight {
+        constructor(color, intensity) {
+          this.color = color;
+          this.intensity = intensity;
+        }
+      }
+
+      // ========== Scene Class ==========
+      class Scene {
+        constructor(backgroundColor) {
+          this.objects = [];
+          this.lights = [];
+          this.ambientLight = null;
+          this.backgroundColor = backgroundColor;
+        }
+
+        addObject(object) {
+          this.objects.push(object);
+        }
+
+        addLight(light) {
+          this.lights.push(light);
+        }
+
+        setAmbientLight(ambientLight) {
+          this.ambientLight = ambientLight;
+        }
+
+        trace(ray) {
+          let closestHit = new HitInfo();
+
+          // Find closest object intersecting with ray
+          for (const object of this.objects) {
+            const hit = object.intersect(ray);
+            if (hit.t < closestHit.t) {
+              closestHit = hit;
+            }
+          }
+
+          // If no intersection, return background color
+          if (closestHit.t === Infinity) {
+            return this.backgroundColor;
+          }
+
+          // Calculate lighting with Phong model
+          return this.calculateShading(closestHit, ray);
+        }
+
+        calculateShading(hitInfo, ray) {
+          let finalColor = new Color(0, 0, 0);
+
+          // Ambient component
+          if (this.ambientLight) {
+            const ambientTerm = this.ambientLight.color
+              .multiply(hitInfo.material.color)
+              .scale(hitInfo.material.ambient * this.ambientLight.intensity);
+
+            finalColor = finalColor.add(ambientTerm);
+          }
+
+          // View direction from intersection point to camera
+          const viewDirection = ray.origin.subtract(hitInfo.point).normalize();
+
+          // Diffuse and specular components from each light
+          for (const light of this.lights) {
+            const lightDirection = light.position
+              .subtract(hitInfo.point)
+              .normalize();
+
+            // Diffuse factor
+            const diffuseFactor = Math.max(
+              0,
+              lightDirection.dot(hitInfo.normal)
+            );
+
+            if (diffuseFactor > 0) {
+              // Diffuse contribution
+              const diffuseTerm = light.color
+                .multiply(hitInfo.material.color)
+                .scale(
+                  hitInfo.material.diffuse * light.intensity * diffuseFactor
+                );
+
+              finalColor = finalColor.add(diffuseTerm);
+
+              // Light reflection direction
+              const reflectionDirection = lightDirection
+                .multiply(-1)
+                .reflect(hitInfo.normal);
+
+              // Specular factor
+              const specularFactor = Math.pow(
+                Math.max(0, reflectionDirection.dot(viewDirection)),
+                hitInfo.material.shininess
+              );
+
+              if (specularFactor > 0) {
+                // Specular contribution
+                const specularTerm = light.color.scale(
+                  hitInfo.material.specular * light.intensity * specularFactor
+                );
+
+                finalColor = finalColor.add(specularTerm);
+              }
+            }
+          }
+
+          return finalColor.clamp();
+        }
+      }
+
+      // ========== Renderer Class ==========
+      class Renderer {
+        constructor(canvas) {
+          this.canvas = canvas;
+          this.ctx = canvas.getContext("2d");
+          this.width = canvas.width;
+          this.height = canvas.height;
+          this.aspectRatio = this.width / this.height;
+        }
+
+        render(scene, camera) {
+          const startTime = performance.now();
+
+          const imageData = this.ctx.createImageData(this.width, this.height);
+          const data = imageData.data;
+
+          for (let y = 0; y < this.height; y++) {
+            for (let x = 0; x < this.width; x++) {
+              const ray = camera.generateRay(x, y, this.width, this.height);
+              const color = scene.trace(ray);
+
+              const pixelIndex = (y * this.width + x) * 4;
+              const rgba = color.toRGBA();
+
+              data[pixelIndex] = rgba[0];
+              data[pixelIndex + 1] = rgba[1];
+              data[pixelIndex + 2] = rgba[2];
+              data[pixelIndex + 3] = rgba[3];
+            }
+          }
+
+          this.ctx.putImageData(imageData, 0, 0);
+          const endTime = performance.now();
+          console.log(
+            `Rendering selesai dalam ${(endTime - startTime).toFixed(2)} ms`
+          );
+        }
+      }
+
+      // ========== Main Code ==========
+      // Run when the page is fully loaded
+      window.onload = function () {
+        const canvas = document.getElementById("raytracerCanvas");
+        if (!canvas || !canvas.getContext) {
+          console.error("Canvas tidak tersedia atau tidak didukung");
+          return;
+        }
+
+        const renderer = new Renderer(canvas);
+
+        // Create camera
+        const camera = new Camera(new Vector3(0, 0, 5), renderer.aspectRatio);
+
+        // Create scene
+        const scene = new Scene(new Color(0, 0, 0));
+
+        // Setup Lighting
+        scene.setAmbientLight(new AmbientLight(new Color(1, 1, 1), 0.2));
+        scene.addLight(
+          new Light(new Vector3(5, 5, 5), new Color(1, 1, 1), 0.8)
+        );
+
+        // Floor position
+        const Y_FLOOR = -0.8;
+
+        // Add objects
+        // Floor (plane)
+        scene.addObject(
+          new Plane(
+            new Vector3(0, Y_FLOOR, 0),
+            new Vector3(0, 1, 0),
+            new Material(new Color(0.6, 0.6, 0.6), 0.4, 0.7, 0.05, 10)
+          )
+        );
+
+        // Blue sphere
+        scene.addObject(
+          new Sphere(
+            new Vector3(-0.2, Y_FLOOR + 0.6, -1),
+            0.6,
+            new Material(new Color(0, 0, 1), 0.2, 0.7, 0.5, 32)
+          )
+        );
+
+        // Red sphere
+        scene.addObject(
+          new Sphere(
+            new Vector3(0.5, Y_FLOOR + 0.2, -0.2),
+            0.2,
+            new Material(new Color(1, 0, 0), 0.2, 0.8, 0.8, 64)
+          )
+        );
+
+        // Render scene
+        renderer.render(scene, camera);
+      };
+    </script>
+  </body>
+</html>

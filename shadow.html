@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Raytracer Shadows(Shadows, Multi-Lights)</title>
+    <style>
+      body {
+        margin: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        background-color: #222; /* Darker background for better contrast */
+      }
+      canvas {
+        border: 1px solid #555;
+        display: block;
+      }
+    </style>
+</head>
+<body>
+    <canvas id="raytraceCanvas" width="500" height="500"></canvas>
+
+    <script>
+    // --- Vector Math Library (Equivalent to helperphong.js) ---
+    const Vector = {
+        create: (x = 0, y = 0, z = 0) => ({ x, y, z }),
+        add: (v1, v2) => ({ x: v1.x + v2.x, y: v1.y + v2.y, z: v1.z + v2.z }),
+        subtract: (v1, v2) => ({ x: v1.x - v2.x, y: v1.y - v2.y, z: v1.z - v2.z }),
+        multiplyScalar: (v, s) => ({ x: v.x * s, y: v.y * s, z: v.z * s }),
+        dot: (v1, v2) => v1.x * v2.x + v1.y * v2.y + v1.z * v2.z,
+        lengthSq: (v) => v.x * v.x + v.y * v.y + v.z * v.z,
+        length: (v) => Math.sqrt(Vector.lengthSq(v)),
+        normalize: (v) => {
+            const len = Vector.length(v);
+            if (len === 0) return Vector.create(); // Avoid division by zero
+            return Vector.multiplyScalar(v, 1 / len);
+        },
+        negate: (v) => ({ x: -v.x, y: -v.y, z: -v.z }),
+        // addScaledVector: (v1, v2, scale) => Vector.add(v1, Vector.multiplyScalar(v2, scale)) // Not used in original, but good to have
+    };
+
+    // --- Color Utilities ---
+    const Color = {
+        create: (r = 0, g = 0, b = 0) => ([r, g, b]), // Represent colors as [r,g,b] arrays
+        add: (c1, c2) => ([c1[0] + c2[0], c1[1] + c2[1], c1[2] + c2[2]]),
+        multiply: (c1, c2) => ([c1[0] * c2[0], c1[1] * c2[1], c1[2] * c2[2]]),
+        multiplyScalar: (c, s) => ([c[0] * s, c[1] * s, c[2] * s]),
+        lerp: (c1, c2, factor) => {
+            const t = Math.max(0, Math.min(1, factor));
+            return [
+                c1[0] + (c2[0] - c1[0]) * t,
+                c1[1] + (c2[1] - c1[1]) * t,
+                c1[2] + (c2[2] - c1[2]) * t,
+            ];
+        },
+        clamp: (c) => ([
+            Math.max(0, Math.min(1, c[0])),
+            Math.max(0, Math.min(1, c[1])),
+            Math.max(0, Math.min(1, c[2])),
+        ]),
+        toRGBA255: (c) => {
+            const clamped = Color.clamp(c);
+            return [
+                Math.round(clamped[0] * 255),
+                Math.round(clamped[1] * 255),
+                Math.round(clamped[2] * 255),
+                255, // Alpha
+            ];
+        }
+    };
+
+
+    document.addEventListener("DOMContentLoaded", () => {
+        const canvas = document.getElementById("raytraceCanvas");
+        if (!canvas.getContext) {
+            console.error("Canvas 2D context not supported.");
+            return;
+        }
+        const ctx = canvas.getContext("2d");
+        const canvasWidth = canvas.width;
+        const canvasHeight = canvas.height;
+
+        // --- Constants ---
+        const RAY_EPSILON = 1e-4; // Small offset for rays to avoid self-intersection
+
+        // --- Scene Configuration ---
+        const camera = {
+            origin: Vector.create(0, 0, 5),
+            viewPlaneDistance: 1.0, // Not explicitly used, but conceptual for FOV
+            viewPlaneWidth: 3.0,   // Controls Field of View
+            viewPlaneHeight: 3.0   // Controls Field of View
+        };
+
+        const lights = [
+            {
+                position: Vector.create(5, 5, 5),
+                ambient: Color.create(0.1, 0.1, 0.1),
+                diffuse: Color.create(0.6, 0.6, 0.6),
+                specular: Color.create(0.8, 0.8, 0.8),
+            },
+            {
+                position: Vector.create(-5, 5, 5),
+                ambient: Color.create(0.05, 0.05, 0.05),
+                diffuse: Color.create(0.3, 0.3, 0.3),
+                specular: Color.create(0.4, 0.4, 0.4),
+            }
+        ];
+
+        const baseFloorY = -0.8;
+        const floorY = baseFloorY - RAY_EPSILON * 2; // Shift to avoid z-fighting
+
+        const sceneObjects = [
+            {
+                type: "plane",
+                point: Vector.create(0, floorY, 0),
+                normal: Vector.normalize(Vector.create(0, 1, 0)), // Ensure normalized
+                material: {
+                    ambient: Color.create(0.1, 0.1, 0.1),
+                    diffuse: null, // Will be determined by gradient
+                    specular: Color.create(0.2, 0.2, 0.2),
+                    shininess: 10,
+                },
+                gradient: { // Specific to this plane
+                    axis: "x", // 'x', 'y', or 'z'
+                    colors: [Color.create(0.6, 0.6, 0.8), Color.create(0.8, 0.6, 0.6)],
+                    range: [-3, 3],
+                }
+            },
+            {
+                type: "sphere",
+                center: Vector.create(-1.2, baseFloorY + 0.5, -0.5),
+                radius: 0.5,
+                material: {
+                    ambient: Color.create(0.1, 0, 0),
+                    diffuse: Color.create(0.7, 0, 0),
+                    specular: Color.create(1.0, 1.0, 1.0),
+                    shininess: 32,
+                }
+            },
+            {
+                type: "sphere",
+                center: Vector.create(0, baseFloorY + 0.8, 0),
+                radius: 0.8,
+                material: {
+                    ambient: Color.create(0.05, 0.05, 0.05),
+                    diffuse: Color.create(0.0, 0.0, 0.7),
+                    specular: Color.create(1.0, 1.0, 1.0),
+                    shininess: 64,
+                }
+            },
+            {
+                type: "sphere",
+                center: Vector.create(1.2, baseFloorY + 0.5, -1.5),
+                radius: 0.5,
+                material: {
+                    ambient: Color.create(0, 0.1, 0),
+                    diffuse: Color.create(0, 0.7, 0),
+                    specular: Color.create(1.0, 1.0, 1.0),
+                    shininess: 32,
+                }
+            }
+        ];
+
+        const backgroundColor = Color.create(135 / 255, 206 / 255, 235 / 255); // Sky Blue
+
+        // --- Intersection Functions ---
+        function intersectSphere(rayOrigin, rayDirection, sphere) {
+            const oc = Vector.subtract(rayOrigin, sphere.center);
+            const a = Vector.dot(rayDirection, rayDirection);
+            const b = 2.0 * Vector.dot(oc, rayDirection);
+            const c = Vector.dot(oc, oc) - sphere.radius * sphere.radius;
+            const discriminant = b * b - 4 * a * c;
+
+            if (discriminant < 0) return -1;
+
+            const sqrtD = Math.sqrt(discriminant);
+            const t0 = (-b - sqrtD) / (2 * a);
+            const t1 = (-b + sqrtD) / (2 * a);
+
+            if (t0 > RAY_EPSILON) return t0;
+            if (t1 > RAY_EPSILON) return t1;
+            return -1;
+        }
+
+        function intersectPlane(rayOrigin, rayDirection, plane) {
+            const denom = Vector.dot(plane.normal, rayDirection);
+            if (Math.abs(denom) > 1e-6) { // Avoid parallel rays
+                const t = Vector.dot(Vector.subtract(plane.point, rayOrigin), plane.normal) / denom;
+                if (t > RAY_EPSILON) return t;
+            }
+            return -1;
+        }
+
+        function findClosestIntersection(rayOrigin, rayDirection, objects) {
+            let closestHit = { t: Infinity, object: null, point: null, normal: null };
+
+            for (const object of objects) {
+                let t = -1;
+                if (object.type === "sphere") {
+                    t = intersectSphere(rayOrigin, rayDirection, object);
+                } else if (object.type === "plane") {
+                    t = intersectPlane(rayOrigin, rayDirection, object);
+                }
+
+                if (t > RAY_EPSILON && t < closestHit.t) {
+                    closestHit.t = t;
+                    closestHit.object = object;
+                    closestHit.point = Vector.add(rayOrigin, Vector.multiplyScalar(rayDirection, t));
+                    if (object.type === "sphere") {
+                        closestHit.normal = Vector.normalize(Vector.subtract(closestHit.point, object.center));
+                    } else if (object.type === "plane") {
+                        closestHit.normal = object.normal; // Assumed to be normalized already
+                    }
+                }
+            }
+            return closestHit.object ? closestHit : null; // Return null if no hit
+        }
+
+        // --- Shading Function (Phong) ---
+        function calculateShading(hitInfo, viewDirection, lights, objects) {
+            const material = hitInfo.object.material;
+            let finalColor = Color.create(0,0,0); // Start with black
+
+            // Determine effective diffuse color (e.g., for plane gradient)
+            let effectiveDiffuse = material.diffuse;
+            if (hitInfo.object.type === 'plane' && hitInfo.object.gradient) {
+                const grad = hitInfo.object.gradient;
+                const hitPointVal = hitInfo.point[grad.axis]; // e.g., hitInfo.point.x
+                const range = grad.range[1] - grad.range[0];
+                const factor = (hitPointVal - grad.range[0]) / range;
+                effectiveDiffuse = Color.lerp(grad.colors[0], grad.colors[1], factor);
+            }
+            
+            // Ambient component (sum from all lights)
+            let totalAmbient = Color.create(0,0,0);
+            for (const light of lights) {
+                totalAmbient = Color.add(totalAmbient, light.ambient);
+            }
+            finalColor = Color.add(finalColor, Color.multiply(totalAmbient, material.ambient));
+
+
+            // Diffuse and Specular components (per light, with shadows)
+            for (const light of lights) {
+                const lightDirection = Vector.normalize(Vector.subtract(light.position, hitInfo.point));
+                const distanceToLight = Vector.length(Vector.subtract(light.position, hitInfo.point));
+
+                // Shadow check
+                const shadowRayOrigin = Vector.add(hitInfo.point, Vector.multiplyScalar(hitInfo.normal, RAY_EPSILON));
+                const shadowHit = findClosestIntersection(shadowRayOrigin, lightDirection, objects);
+
+                let isInShadow = false;
+                if (shadowHit && shadowHit.t < distanceToLight) {
+                    isInShadow = true;
+                }
+
+                if (!isInShadow) {
+                    // Diffuse
+                    const diffuseIntensity = Math.max(0, Vector.dot(hitInfo.normal, lightDirection));
+                    const diffuseComponent = Color.multiplyScalar(Color.multiply(light.diffuse, effectiveDiffuse), diffuseIntensity);
+                    finalColor = Color.add(finalColor, diffuseComponent);
+
+                    // Specular
+                    // R = 2 * (N dot L) * N - L
+                    const reflectDirection = Vector.normalize(
+                        Vector.subtract(
+                            Vector.multiplyScalar(hitInfo.normal, 2 * Vector.dot(hitInfo.normal, lightDirection)),
+                            lightDirection
+                        )
+                    );
+                    const specularIntensity = Math.pow(Math.max(0, Vector.dot(viewDirection, reflectDirection)), material.shininess);
+                    const specularComponent = Color.multiplyScalar(Color.multiply(light.specular, material.specular), specularIntensity);
+                    finalColor = Color.add(finalColor, specularComponent);
+                }
+            }
+            return Color.clamp(finalColor);
+        }
+
+        // --- Ray Tracing Core ---
+        function traceRay(rayOrigin, rayDirection, objects, lights, bgColor) {
+            const hitInfo = findClosestIntersection(rayOrigin, rayDirection, objects);
+
+            if (!hitInfo) {
+                return bgColor; // No hit, return background
+            }
+
+            const viewDirection = Vector.normalize(Vector.subtract(rayOrigin, hitInfo.point));
+            return calculateShading(hitInfo, viewDirection, lights, objects);
+        }
+
+        // --- Render Scene ---
+        function render() {
+            console.time("RenderTime");
+            const imageData = ctx.createImageData(canvasWidth, canvasHeight);
+            const data = imageData.data;
+
+            // Fill background once (though traceRay handles misses)
+            // const bgRgba = Color.toRGBA255(backgroundColor);
+            // for (let i = 0; i < data.length; i += 4) {
+            //     data[i] = bgRgba[0]; data[i+1] = bgRgba[1]; data[i+2] = bgRgba[2]; data[i+3] = bgRgba[3];
+            // }
+
+            const aspectRatio = canvasWidth / canvasHeight;
+
+            for (let y = 0; y < canvasHeight; y++) {
+                for (let x = 0; x < canvasWidth; x++) {
+                    // Map pixel coordinates to view plane coordinates
+                    // NDC (Normalized Device Coordinates): [-1, 1]
+                    const ndcX = (x + 0.5) / canvasWidth * 2 - 1;
+                    const ndcY = (1 - (y + 0.5) / canvasHeight) * 2 - 1; // Y is inverted
+
+                    const viewPlaneX = ndcX * (camera.viewPlaneWidth / 2) * aspectRatio;
+                    const viewPlaneY = ndcY * (camera.viewPlaneHeight / 2);
+                    
+                    // Point on the view plane (assuming it's at z=0 relative to camera, then moved by camera origin)
+                    // For simplicity, let's assume view plane is at Z=0 in world space, and camera is at Z=camera.origin.z
+                    // and looking towards -Z.
+                    // The ray direction target on the view plane (Z=0)
+                    const pointOnViewPlane = Vector.create(
+                        viewPlaneX,
+                        viewPlaneY,
+                        0 // View plane at z=0, camera is at z=camera.origin.z looking towards it
+                    );
+
+                    const rayOrigin = camera.origin;
+                    const rayDirection = Vector.normalize(Vector.subtract(pointOnViewPlane, rayOrigin));
+
+                    const pixelColor = traceRay(rayOrigin, rayDirection, sceneObjects, lights, backgroundColor);
+                    const rgba = Color.toRGBA255(pixelColor);
+
+                    const pixelIndex = (y * canvasWidth + x) * 4;
+                    data[pixelIndex]     = rgba[0];
+                    data[pixelIndex + 1] = rgba[1];
+                    data[pixelIndex + 2] = rgba[2];
+                    data[pixelIndex + 3] = rgba[3];
+                }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+            console.timeEnd("RenderTime");
+            console.log("Raytracing complete (Rebuild).");
+        }
+
+        render(); // Start rendering
+    });
+    </script>
+</body>
+</html>
