@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Three.js UV Map - Walkthrough Camera</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+      #blocker {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+      }
+      #instructions {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        font-size: 14px;
+        cursor: pointer;
+        color: white;
+        font-family: sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="blocker">
+      <div id="instructions">
+        <p style="font-size: 36px">Klik untuk memulai</p>
+        <p>
+          Gerak: WASD atau Tombol Panah<br />
+          Lihat: Gerakkan Mouse<br />
+          Keluar: ESC
+        </p>
+      </div>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+      // GANTI: Import PointerLockControls
+      import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
+
+      let scene, camera, renderer, controls;
+      let cube, sphere, pyramid, platform;
+      let textureLoader, uvTexture;
+
+      const placeholderUvGrid = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAALoSURBVHhe7ZpLTBNRGMf/O+2y05RVquAYgiBEbMSExYQQTSNSDRcXLZq4sBHjRhPXBNxoQjAuiIsGN4kL48ZNCsUYVRMTxxhQBGkREaG0NG1P5829f6bt9J6v9B/NIiJ/9/zP+c97vzn/ewBSSin1Z4G9lWBvJdhbCbZWgr2XYG8l2FsJthZCRDDQA4M2h9L4kRjQBNAnzNbAD6kR8+sB9IsA+oUA+kwAfa4A+qAA+lgA/XIA/YoA+kEA/acA+q8A+l8A/acA+lcA/REJIGQCYgM1MA+GAgI2sD0kUAA/QoA2sAekzQfQ7AOo5Ado2APgUgIgQwQYgAsJgCEgAIZ8kQYIUF0A4SgAHCYABkXpAEc8gXoAooIAGsAAOqEEyKkGSOcEzFcNkOkA8FUBdCgADvUDqFYAneYDPGwC7PYB3PYC/NMB0FvQvA8Agz0AvhMACxGAcR+AXxMA2YcBGgA2fQD8MIAmPwCzPgB/LIA9XwBzPwC/LIAyHwCz/wP895zR6LgjM5RRxkM9+Q/GvQ8y+wHm33R0V8P89VzS2r8VjT8P8PcAcNcB2EwAdN9uV2AbKzO5t6z3OQAZOgDYzAPQ0AFgUgKgMwIAEwEAjQoAjBkAqDwAMGYCoPMAwGAAPzkAcAIAQAEAPgCAmAMAjB8A6BsAIDsAkHoAABMAgAEARAMA/AgADIQAyEcA+CUAwBMAQH4wHwA2fgD8MwB8/AH4ZwDyPwB/AGDGDPgEAEAc+NMAgDPwjwAAX+EPAFz8BQDwBfACAPAF8M8DAPAF8NMDwD+fA+DLA0BfHkDfAyDvgXAAuHMAVAkALgYA10kAr5MAjkoAfCoADhWAFQPAcgGgdgGAdgHAdgHAdgGgdgGAVgGAGgFgBgCYAQAmAICNBGxsYBe9ARsJ2Eg3YAMhRARRGgH0i0BUB0BUIwBRLgBRLgBRDwDRDABhCAAhAQChDwDRBACkAwApAQBpAICKAAARAGgCAEACAAgEACCkEEJ6wY820jJ+APkAVwO9tHwAAAAASUVORK5CYII=";
+
+      // Variabel untuk pergerakan
+      let moveForward = false;
+      let moveBackward = false;
+      let moveLeft = false;
+      let moveRight = false;
+      let canJump = false; // Belum diimplementasikan di contoh ini, tapi bisa ditambahkan
+
+      let prevTime = performance.now();
+      const velocity = new THREE.Vector3();
+      const direction = new THREE.Vector3();
+
+      function init() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+
+        camera = new THREE.PerspectiveCamera(
+          75,
+          window.innerWidth / window.innerHeight,
+          0.1,
+          1000
+        );
+        // Posisikan kamera pada ketinggian mata
+        camera.position.set(0, 1.7, 5); // y = tinggi mata dari tanah
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // Inisialisasi PointerLockControls
+        controls = new PointerLockControls(camera, document.body);
+
+        const blocker = document.getElementById('blocker');
+        const instructions = document.getElementById('instructions');
+
+        instructions.addEventListener('click', function () {
+          controls.lock();
+        });
+
+        controls.addEventListener('lock', function () {
+          instructions.style.display = 'none';
+          blocker.style.display = 'none';
+        });
+
+        controls.addEventListener('unlock', function () {
+          blocker.style.display = 'block';
+          instructions.style.display = '';
+        });
+
+        scene.add(controls.getObject()); // Penting: tambahkan objek kontrol (kamera) ke scene
+
+        // Event listener untuk keyboard
+        const onKeyDown = function (event) {
+          switch (event.code) {
+            case 'ArrowUp':
+            case 'KeyW':
+              moveForward = true;
+              break;
+            case 'ArrowLeft':
+            case 'KeyA':
+              moveLeft = true;
+              break;
+            case 'ArrowDown':
+            case 'KeyS':
+              moveBackward = true;
+              break;
+            case 'ArrowRight':
+            case 'KeyD':
+              moveRight = true;
+              break;
+            // case 'Space': // Untuk lompat (jika diimplementasikan)
+            //   if (canJump === true) velocity.y += 350;
+            //   canJump = false;
+            //   break;
+          }
+        };
+
+        const onKeyUp = function (event) {
+          switch (event.code) {
+            case 'ArrowUp':
+            case 'KeyW':
+              moveForward = false;
+              break;
+            case 'ArrowLeft':
+            case 'KeyA':
+              moveLeft = false;
+              break;
+            case 'ArrowDown':
+            case 'KeyS':
+              moveBackward = false;
+              break;
+            case 'ArrowRight':
+            case 'KeyD':
+              moveRight = false;
+              break;
+          }
+        };
+
+        document.addEventListener('keydown', onKeyDown);
+        document.addEventListener('keyup', onKeyUp);
+
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        directionalLight.position.set(8, 15, 10);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -15;
+        directionalLight.shadow.camera.right = 15;
+        directionalLight.shadow.camera.top = 15;
+        directionalLight.shadow.camera.bottom = -15;
+        scene.add(directionalLight);
+
+        textureLoader = new THREE.TextureLoader();
+        uvTexture = textureLoader.load(
+          "textures/uv_grid.jpg",
+          (texture) => {
+            console.log("Tekstur UV berhasil dimuat!");
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            createObjects();
+          },
+          undefined,
+          (error) => {
+            console.error("Gagal memuat tekstur UV 'textures/uv_grid.jpg':", error);
+            console.log("Mencoba memuat placeholder data URL untuk tekstur UV...");
+            uvTexture = textureLoader.load(
+                placeholderUvGrid,
+                (texture) => {
+                    console.log("Placeholder tekstur UV berhasil dimuat!");
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    alert("Gagal memuat 'textures/uv_grid.jpg'. Menggunakan placeholder tekstur.");
+                    createObjects();
+                },
+                undefined,
+                (placeholderError) => {
+                    console.error("Gagal memuat placeholder tekstur UV:", placeholderError);
+                    alert(
+                      "Gagal memuat tekstur UV! Pastikan file 'textures/uv_grid.jpg' ada di direktori textures/. Placeholder juga gagal."
+                    );
+                    const errorMaterial = new THREE.MeshBasicMaterial({
+                      color: 0xff0000,
+                      wireframe: true,
+                    });
+                    createObjects(errorMaterial);
+                }
+            );
+          }
+        );
+
+        animate();
+        window.addEventListener("resize", onWindowResize, false);
+      }
+
+      function createObjects(fallbackMaterial = null) {
+        const platformGeometry = new THREE.PlaneGeometry(20, 20);
+        let platformMaterial;
+        if (fallbackMaterial) {
+          platformMaterial = fallbackMaterial.clone();
+          platformMaterial.side = THREE.DoubleSide;
+        } else {
+          platformMaterial = new THREE.MeshStandardMaterial({
+            map: uvTexture,
+            side: THREE.DoubleSide,
+            roughness: 0.8,
+            metalness: 0.1,
+          });
+        }
+        
+        platform = new THREE.Mesh(platformGeometry, platformMaterial);
+        platform.rotation.x = -Math.PI / 2;
+        platform.position.y = -0.05; // Pastikan platform sedikit di bawah titik 0 agar tidak Z-fighting
+        platform.receiveShadow = true;
+        scene.add(platform);
+
+        if (uvTexture && !fallbackMaterial && platform.material.map) {
+            platform.material.map.repeat.set(5, 5);
+            platform.material.map.needsUpdate = true;
+        }
+
+        const cubeGeometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+        const sphereGeometry = new THREE.SphereGeometry(1, 64, 64);
+        const pyramidGeometry = new THREE.ConeGeometry(1, 1.5, 4, 1, false, Math.PI / 4);
+
+        let cubeMaterial, sphereMaterial, pyramidMaterial;
+
+        if (fallbackMaterial) {
+          cubeMaterial = fallbackMaterial.clone();
+          sphereMaterial = fallbackMaterial.clone();
+          pyramidMaterial = fallbackMaterial.clone();
+        } else {
+          cubeMaterial = new THREE.MeshStandardMaterial({
+            emissive: 0x999999,
+            emissiveMap: uvTexture,
+            map: uvTexture,
+            roughness: 0.9,
+            metalness: 0.05,
+          });
+
+          sphereMaterial = new THREE.MeshPhongMaterial({
+            map: uvTexture,
+            shininess: 90,
+            color: 0xffffff,
+            specular: 0xdddddd,
+          });
+
+          pyramidMaterial = new THREE.MeshPhongMaterial({
+            map: uvTexture,
+            shininess: 300,
+            color: 0xffffff,
+            specular: 0xffffff,
+          });
+        }
+
+        cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+        cube.position.set(-3.5, 0.75, 0);
+        cube.castShadow = true;
+        scene.add(cube);
+
+        sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+        sphere.position.set(0, 1, 0);
+        sphere.castShadow = true;
+        scene.add(sphere);
+
+        pyramid = new THREE.Mesh(pyramidGeometry, pyramidMaterial);
+        pyramid.position.set(3.5, 0.75, 0);
+        pyramid.castShadow = true;
+        scene.add(pyramid);
+      }
+
+      function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        const time = performance.now();
+
+        if (controls.isLocked === true) { // Hanya bergerak jika pointer terkunci
+          const delta = (time - prevTime) / 1000; // Waktu dalam detik
+
+          // Damping (perlambatan)
+          velocity.x -= velocity.x * 10.0 * delta;
+          velocity.z -= velocity.z * 10.0 * delta;
+          // velocity.y -= 9.8 * 100.0 * delta; // Gravitasi (bisa ditambahkan)
+
+          direction.z = Number(moveForward) - Number(moveBackward);
+          direction.x = Number(moveRight) - Number(moveLeft);
+          direction.normalize(); // Memastikan kecepatan konsisten saat bergerak diagonal
+
+          const moveSpeed = 40.0; // Sesuaikan kecepatan gerak di sini
+
+          if (moveForward || moveBackward) velocity.z -= direction.z * moveSpeed * delta;
+          if (moveLeft || moveRight) velocity.x -= direction.x * moveSpeed * delta;
+          
+          // Menggerakkan kamera
+          controls.moveRight(-velocity.x * delta); // moveRight dengan nilai negatif untuk ke kiri
+          controls.moveForward(-velocity.z * delta); // moveForward dengan nilai negatif untuk mundur
+
+          // Menjaga kamera pada ketinggian tertentu (jika tidak ada gravitasi/lompat)
+          // controls.getObject().position.y = 1.7; 
+          // Jika Anda ingin menambahkan lompat atau gravitasi, baris ini perlu dimodifikasi/dihapus
+        }
+
+        prevTime = time;
+
+        if (cube) cube.rotation.y += 0.003;
+        if (sphere) sphere.rotation.y += 0.004;
+        if (pyramid) pyramid.rotation.y += 0.003;
+
+        // Hapus controls.update() karena PointerLockControls tidak memerlukannya
+        // controls.update(); 
+        renderer.render(scene, camera);
+      }
+
+      init();
+    </script>
+  </body>
+</html>
