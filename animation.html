@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kubus Bergerak Three.js (Tanpa Lighting)</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+
+        // 1. Inisialisasi Scene, Camera, dan Renderer
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true }); // antialias untuk tepi yang lebih halus
+
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // 2. Membuat Geometri Kubus
+        const geometry = new THREE.BoxGeometry(1, 1, 1); // Ukuran kubus 1x1x1 unit
+
+        // 3. Membuat Material (Tanpa Pencahayaan)
+        // MeshBasicMaterial tidak terpengaruh oleh cahaya
+        const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); // Warna hijau
+
+        // 4. Membuat Mesh (Objek Kubus)
+        const cube = new THREE.Mesh(geometry, material);
+        scene.add(cube); // Tambahkan kubus ke scene
+
+        // 5. Mengatur Posisi Kamera
+        // Pindahkan kamera sedikit ke belakang agar kubus terlihat
+        camera.position.z = 5;
+
+        // 6. Fungsi Animasi
+        function animate() {
+            requestAnimationFrame(animate); // Loop animasi
+
+            // Animasi: Putar kubus pada sumbu X dan Y
+            cube.rotation.x += 0.01;
+            cube.rotation.y += 0.01;
+
+            // Bisa juga animasi posisi, contoh:
+            // cube.position.x += Math.sin(Date.now() * 0.001) * 0.01;
+
+            renderer.render(scene, camera); // Render scene dari sudut pandang kamera
+        }
+
+        // 7. Menangani Perubahan Ukuran Jendela
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Mulai animasi
+        animate();
+    </script>
+</body>
+</html>
