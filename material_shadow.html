@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Three.js UV Map - Bayangan dan Platform (Emisi Ditingkatkan)</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+      let scene, camera, renderer, controls;
+      let cube, sphere, pyramid, platform;
+      let textureLoader, uvTexture;
+
+      const placeholderUvGrid = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAALoSURBVHhe7ZpLTBNRGMf/O+2y05RVquAYgiBEbMSExYQQTSNSDRcXLZq4sBHjRhPXBNxoQjAuiIsGN4kL48ZNCsUYVRMTxxhQBGkREaG0NG1P5829f6bt9J6v9B/NIiJ/9/zP+c97vzn/ewBSSin1Z4G9lWBvJdhbCbZWgr2XYG8l2FsJthZCRDDQA4M2h9L4kRjQBNAnzNbAD6kR8+sB9IsA+oUA+kwAfa4A+qAA+lgA/XIA/YoA+kEA/acA+q8A+l8A/acA+lcA/REJIGQCYgM1MA+GAgI2sD0kUAA/QoA2sAekzQfQ7AOo5Ado2APgUgIgQwQYgAsJgCEgAIZ8kQYIUF0A4SgAHCYABkXpAEc8gXoAooIAGsAAOqEEyKkGSOcEzFcNkOkA8FUBdCgADvUDqFYAneYDPGwC7PYB3PYC/NMB0FvQvA8Agz0AvhMACxGAcR+AXxMA2YcBGgA2fQD8MIAmPwCzPgB/LIA9XwBzPwC/LIAyHwCz/wP895zR6LgjM5RRxkM9+Q/GvQ8y+wHm33R0V8P89VzS2r8VjT8P8PcAcNcB2EwAdN9uV2AbKzO5t6z3OQAZOgDYzAPQ0AFgUgKgMwIAEwEAjQoAjBkAqDwAMGYCoPMAwGAAPzkAcAIAQAEAPgCAmAMAjB8A6BsAIDsAkHoAABMAgAEARAMA/AgADIQAyEcA+CUAwBMAQH4wHwA2fgD8MwB8/AH4ZwDyPwB/AGDGDPgEAEAc+NMAgDPwjwAAX+EPAFz8BQDwBfACAPAF8M8DAPAF8NMDwD+fA+DLA0BfHkDfAyDvgXAAuHMAVAkALgYA10kAr5MAjkoAfCoADhWAFQPAcgGgdgGAdgHAdgHAdgGgdgGAVgGAGgFgBgCYAQAmAICNBGxsYBe9ARsJ2Eg3YAMhRARRGgH0i0BUB0BUIwBRLgBRLgBRDwDRDABhCAAhAQChDwDRBACkAwApAQBpAICKAAARAGgCAEACAAgEACCkEEJ6wY820jJ+APkAVwO9tHwAAAAASUVORK5CYII=";
+
+      function init() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+
+        camera = new THREE.PerspectiveCamera(
+          75,
+          window.innerWidth / window.innerHeight,
+          0.1,
+          1000
+        );
+        camera.position.set(4, 5, 7);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.set(0, 1, 0);
+
+        // 5. Lighting - Intensitas disesuaikan agar emisi lebih terlihat
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.2); // DIUBAH: Intensitas ambient sedikit lebih rendah
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5); // DIUBAH: Intensitas directional sedikit lebih rendah
+        directionalLight.position.set(8, 15, 10);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -15;
+        directionalLight.shadow.camera.right = 15;
+        directionalLight.shadow.camera.top = 15;
+        directionalLight.shadow.camera.bottom = -15;
+        scene.add(directionalLight);
+
+        textureLoader = new THREE.TextureLoader();
+        uvTexture = textureLoader.load(
+          "textures/uv_grid.jpg",
+          (texture) => {
+            console.log("Tekstur UV berhasil dimuat!");
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            createObjects();
+          },
+          undefined,
+          (error) => {
+            console.error("Gagal memuat tekstur UV 'textures/uv_grid.jpg':", error);
+            console.log("Mencoba memuat placeholder data URL untuk tekstur UV...");
+            uvTexture = textureLoader.load(
+                placeholderUvGrid,
+                (texture) => {
+                    console.log("Placeholder tekstur UV berhasil dimuat!");
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    alert("Gagal memuat 'textures/uv_grid.jpg'. Menggunakan placeholder tekstur.");
+                    createObjects();
+                },
+                undefined,
+                (placeholderError) => {
+                    console.error("Gagal memuat placeholder tekstur UV:", placeholderError);
+                    alert(
+                      "Gagal memuat tekstur UV! Pastikan file 'textures/uv_grid.jpg' ada di direktori textures/. Placeholder juga gagal."
+                    );
+                    const errorMaterial = new THREE.MeshBasicMaterial({
+                      color: 0xff0000,
+                      wireframe: true,
+                    });
+                    createObjects(errorMaterial);
+                }
+            );
+          }
+        );
+
+        animate();
+        window.addEventListener("resize", onWindowResize, false);
+      }
+
+      function createObjects(fallbackMaterial = null) {
+        const platformGeometry = new THREE.PlaneGeometry(20, 20);
+        let platformMaterial;
+        if (fallbackMaterial) {
+          platformMaterial = fallbackMaterial.clone();
+          platformMaterial.side = THREE.DoubleSide;
+        } else {
+          platformMaterial = new THREE.MeshStandardMaterial({
+            map: uvTexture,
+            side: THREE.DoubleSide,
+            roughness: 0.8,
+            metalness: 0.1,
+          });
+        }
+        
+        platform = new THREE.Mesh(platformGeometry, platformMaterial);
+        platform.rotation.x = -Math.PI / 2;
+        platform.position.y = -0.05;
+        platform.receiveShadow = true;
+        scene.add(platform);
+
+        if (uvTexture && !fallbackMaterial && platform.material.map) {
+            platform.material.map.repeat.set(5, 5);
+            platform.material.map.needsUpdate = true;
+        }
+
+        const cubeGeometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+        const sphereGeometry = new THREE.SphereGeometry(1, 64, 64);
+        const pyramidGeometry = new THREE.ConeGeometry(1, 1.5, 4, 1, false, Math.PI / 4);
+
+        let cubeMaterial, sphereMaterial, pyramidMaterial;
+
+        if (fallbackMaterial) {
+          cubeMaterial = fallbackMaterial.clone();
+          sphereMaterial = fallbackMaterial.clone();
+          pyramidMaterial = fallbackMaterial.clone();
+        } else {
+          // Kubus: Emisif
+          cubeMaterial = new THREE.MeshStandardMaterial({
+            emissive: 0x999999, // DIUBAH: Nilai emisi dinaikkan (abu-abu lebih terang)
+            emissiveMap: uvTexture, // Peta emisi menggunakan tekstur UV
+            map: uvTexture,         // Peta warna dasar juga menggunakan tekstur UV
+            roughness: 0.9,
+            metalness: 0.05,
+          });
+          // Dengan emissiveMap, bagian tekstur yang lebih terang akan memancarkan
+          // cahaya sesuai warna 'emissive'. Bagian hitam/gelap pada tekstur
+          // tidak akan memancarkan atau memancarkan lebih sedikit.
+          // Efeknya adalah tekstur itu sendiri tampak "bersinar" sedikit.
+
+          // Bola: Phong - Cukup Shiny
+          sphereMaterial = new THREE.MeshPhongMaterial({
+            map: uvTexture,
+            shininess: 90,
+            color: 0xffffff, // Warna dasar putih agar tekstur terlihat jelas
+            specular: 0xdddddd,
+          });
+
+          // Limas: Phong - Sangat Sangat Shiny
+          pyramidMaterial = new THREE.MeshPhongMaterial({
+            map: uvTexture,
+            shininess: 300,
+            color: 0xffffff, // Warna dasar putih
+            specular: 0xffffff,
+          });
+        }
+
+        cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+        cube.position.set(-3.5, 0.75, 0);
+        cube.castShadow = true;
+        scene.add(cube);
+
+        sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+        sphere.position.set(0, 1, 0);
+        sphere.castShadow = true;
+        scene.add(sphere);
+
+        pyramid = new THREE.Mesh(pyramidGeometry, pyramidMaterial);
+        pyramid.position.set(3.5, 0.75, 0);
+        pyramid.castShadow = true;
+        scene.add(pyramid);
+      }
+
+      function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        if (cube) cube.rotation.y += 0.003;
+        if (sphere) sphere.rotation.y += 0.004;
+        if (pyramid) pyramid.rotation.y += 0.003;
+
+        controls.update();
+        renderer.render(scene, camera);
+      }
+
+      init();
+    </script>
+  </body>
+</html>
